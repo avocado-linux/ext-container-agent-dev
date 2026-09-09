@@ -3,6 +3,11 @@ name: Release
 # Package + publish on a version tag. The matrix lives here (the caller owns it);
 # each leg calls the single-combo reusable helper. The publish feed is derived from
 # distro-release/distro-channel. The tag must equal the avocado.yaml version.
+#
+# One row per target in avocado.yaml `supported_targets`. Keep the two lists in
+# step: a target published here but not declared there ships something the
+# extension does not claim to support, and the reverse claims support for
+# something never built.
 on:
   push:
     tags:
@@ -13,11 +18,16 @@ on:
 jobs:
   publish:
     strategy:
+      # Each target reports its own outcome. Without this one target's failure
+      # cancels the rest, and a partial publish looks like a total one.
       fail-fast: false
       matrix:
         include:
           - { target: qemux86-64, distro-release: "2024", distro-channel: next }
-          # Add once your target is published in the 2026 feed:
+          - { target: imx93-frdm, distro-release: "2024", distro-channel: next }
+          # Add once these targets are published in the 2026 feed. As of
+          # 2026-09-09 the 2026 feed carries jetson-agx-thor, qemuarm64 and
+          # qemux86-64 only, so an imx93-frdm row there would fail.
           # - { target: qemux86-64, distro-release: "2026", distro-channel: next }
     uses: avocado-linux/actions/.github/workflows/extension-release.yml@v1
     with:

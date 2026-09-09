@@ -1,0 +1,35 @@
+# Which targets this extension supports. '*' = any target.
+# For a BSP, replace with the single board target and set default_target.
+supported_targets: '*'
+
+extensions:
+  # Rename to avocado-ext-<name> (or avocado-bsp-<board> for a BSP).
+  avocado-ext-template:
+    version: 0.1.0
+    release: r0
+    summary: One-line summary
+    description: One-line description
+    license: Apache-2.0
+    url: https://github.com/avocadolinux/avocado-os
+    vendor: Avocado Linux <info@avocadolinux.org>
+
+    # Runtime packages pulled from the target feed.
+    packages: {}
+
+    # Optional, delete what you don't use:
+    #
+    # enable_services:
+    #   - foo.service
+    #
+    # on_merge:
+    #   - systemctl start --no-block foo.service
+    #
+    # sdk:
+    #   packages:
+    #     nativesdk-foo: '*'
+
+# Release-scoped, not channel-scoped: this resolves to avocadolinux/sdk:2026.
+# The SDK image is per-release only — appending the channel points at a tag
+# that does not exist.
+sdk:
+  image: docker.io/avocadolinux/sdk:{{ env.AVOCADO_DISTRO_RELEASE }}

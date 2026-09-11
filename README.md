@@ -62,3 +62,10 @@ avocado build     # builds the SDK compile steps, extensions and runtime images
 
 `avocado install` pulls the extension from your target's package feed and merges its
 config into your project; `avocado build` then produces the runtime.
+
+## Scratch probe (temporary)
+
+This section is throwaway content used to test the GitHub review-comments API.
+It is intentionally three lines long so an inline suggestion can anchor
+across a range. Line one of the probe block. Line two of the probe block.
+Line three of the probe block, the last one in the range.

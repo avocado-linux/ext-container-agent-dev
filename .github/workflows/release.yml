@@ -4,10 +4,15 @@ name: Release
 # each leg calls the single-combo reusable helper. The publish feed is derived from
 # distro-release/distro-channel. The tag must equal the avocado.yaml version.
 #
-# One row per target in avocado.yaml `supported_targets`. Keep the two lists in
-# step: a target published here but not declared there ships something the
-# extension does not claim to support, and the reverse claims support for
-# something never built.
+# The matrix dimension is the FEED, not the target. An extension version is
+# global within a (distro-release, distro-channel), so two rows differing only by
+# target publish the same version twice into the same feed and the second fails
+# with "that extension version is already taken". Connect fans a published
+# extension out to the per-target feeds itself - avocado-ext-cli and
+# avocado-ext-microclaw are arch-specific and reach both qemux86-64-ext and
+# imx93-frdm-ext while publishing only a qemux86-64 row - so `target` here just
+# names the target used to package, and adding rows for other targets buys
+# nothing while breaking the release.
 on:
   push:
     tags:
@@ -18,17 +23,13 @@ on:
 jobs:
   publish:
     strategy:
-      # Each target reports its own outcome. Without this one target's failure
-      # cancels the rest, and a partial publish looks like a total one.
+      # Each feed reports its own outcome. Without this, one feed's failure
+      # cancels the other and a partial publish looks like a total one.
       fail-fast: false
       matrix:
         include:
+          - { target: qemux86-64, distro-release: "2026", distro-channel: next }
           - { target: qemux86-64, distro-release: "2024", distro-channel: next }
-          - { target: imx93-frdm, distro-release: "2024", distro-channel: next }
-          # Add once these targets are published in the 2026 feed. As of
-          # 2026-09-09 the 2026 feed carries jetson-agx-thor, qemuarm64 and
-          # qemux86-64 only, so an imx93-frdm row there would fail.
-          # - { target: qemux86-64, distro-release: "2026", distro-channel: next }
     uses: avocado-linux/actions/.github/workflows/extension-release.yml@v1
     with:
       target:         ${{ matrix.target }}

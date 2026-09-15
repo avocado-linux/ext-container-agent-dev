@@ -12,7 +12,7 @@ supported_targets:
 
 extensions:
   avocado-ext-container-agent-dev:
-    version: 0.1.1
+    version: 0.2.0
     release: r0
     summary: Container Dev Mode device agent (development only)
     description: |
@@ -40,10 +40,12 @@ extensions:
     url: https://github.com/avocado-linux/ext-container-agent-dev
     vendor: Avocado Linux <info@avocadolinux.org>
 
-    # The crate is staged and cross-compiled at package time, so its sources are
-    # part of the payload rather than a prebuilt artifact.
+    # No `agent` here. The crate is no longer part of the payload: cad-compile.sh
+    # fetches a prebuilt static binary from this version's release instead of
+    # compiling. Shipping the source made the RPM a source package, which pushed
+    # the compile onto consumers who have no Rust cross toolchain in their SDK.
+    # avocado.yaml stays because cad-compile.sh reads the version out of it.
     package_files:
-      - agent
       - overlay
       - avocado.yaml
       - cad-*.sh
@@ -72,15 +74,12 @@ extensions:
         compile: avocado-container-agent-dev
         install: cad-install.sh
 
-    sdk:
-      packages:
-        nativesdk-binutils: '*'
-        nativesdk-cargo: '*'
-        nativesdk-gcc: '*'
-        nativesdk-glibc-dev: '*'
-        nativesdk-libgcc-dev: '*'
-        nativesdk-rust: '*'
-        packagegroup-rust-cross-canadian-avocado-{{ avocado.target }}: '*'
+    # No SDK toolchain. Nothing is compiled at build time any more, so a consumer
+    # needs no Rust cross toolchain in their SDK - which is the point of the
+    # switch. These declarations did not reach a consumer anyway: a package-sourced
+    # extension does not carry its sdk.packages across, so the build failed inside
+    # ring's build script on a machine that had never been told it needed a
+    # compiler.
 
 # Release-scoped, not channel-scoped: this resolves to avocadolinux/sdk:2026.
 # The SDK image is per-release only - appending the channel points at a tag that
@@ -93,8 +92,7 @@ sdk:
     avocado-container-agent-dev:
       compile: cad-compile.sh
       clean: cad-clean.sh
-      packages:
-        libstd-rs: '*'
-        libstd-rs-dev: '*'
+      # No libstd-rs. The hook fetches and unpacks a prebuilt binary; it runs no
+      # compiler, so the Rust runtime libraries it used to need are dead weight.
   packages:
     avocado-sdk-toolchain: '*'

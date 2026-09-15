@@ -3,11 +3,33 @@
 # check-provider.sh - enforce the ring-only rustls crypto provider for the
 # Container Dev Mode device agent.
 #
-# aws-lc-rs is forbidden in this crate (assumption A9: the agent cross-compiles
-# against the musl SDK, which clears only the `ring` stack - the same rule
-# avocado-conn enforces). This guard fails the build if aws-lc-rs ever resolves
-# into the dependency tree, and also asserts that `ring` IS present so a guard
-# that cannot see the tree at all can never masquerade as a pass.
+# aws-lc-rs is forbidden in this crate; ring is the permitted provider. The rule
+# is inherited from avocado-conn, which enforces the same one.
+#
+# The reason is NOT established here, and two plausible-sounding ones have
+# already turned out to be wrong, so this comment states only what was measured.
+#
+#   - "the agent cross-compiles against the musl SDK, which clears only ring."
+#     No build has targeted musl. Every triple built so far is a glibc one
+#     (x86_64-avocado-linux-gnu), and no published feed carries a 32-bit ARM or
+#     musl target to build against.
+#   - "ring is pure Rust, so unlike aws-lc-rs it needs no C toolchain."
+#     False. Measured 2026-09-15: building this crate for
+#     x86_64-avocado-linux-gnu without the cross toolchain on PATH fails inside
+#     ring's own build.rs with
+#     `ToolNotFound: failed to find tool "x86_64-avocado-linux-gcc"`, then
+#     `error: failed to run custom build command for ring v0.17.14`. ring
+#     carries C and assembly and needs a cross C compiler like any other.
+#
+# What would settle it is a measurement nobody has taken: build this crate for
+# each target with aws-lc-rs substituted for ring and record which targets fail
+# and how. Until then, treat the constraint as inherited convention that holds
+# in practice, not as a conclusion with a mechanism behind it. Do not write a
+# third mechanism into this comment without that measurement.
+#
+# This guard fails the build if aws-lc-rs ever resolves into the dependency
+# tree, and also asserts that `ring` IS present so a guard that cannot see the
+# tree at all can never masquerade as a pass.
 #
 # Exit contract (three-way, deliberately NOT a bare `! cargo tree`):
 #   0 - clean ring-only tree (aws-lc-rs absent, ring present)

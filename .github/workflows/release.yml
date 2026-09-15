@@ -1,18 +1,14 @@
 name: Release
 
-# Package + publish on a version tag. The matrix lives here (the caller owns it);
-# each leg calls the single-combo reusable helper. The publish feed is derived from
-# distro-release/distro-channel. The tag must equal the avocado.yaml version.
+# Build the agent binaries, attach them to the release, then package + publish the
+# extension. The tag must equal the avocado.yaml version.
 #
-# The matrix dimension is the FEED, not the target. An extension version is
-# global within a (distro-release, distro-channel), so two rows differing only by
-# target publish the same version twice into the same feed and the second fails
-# with "that extension version is already taken". Connect fans a published
-# extension out to the per-target feeds itself - avocado-ext-cli and
-# avocado-ext-microclaw are arch-specific and reach both qemux86-64-ext and
-# imx93-frdm-ext while publishing only a qemux86-64 row - so `target` here just
-# names the target used to package, and adding rows for other targets buys
-# nothing while breaking the release.
+# Two matrices here answer different questions, and conflating them broke 0.1.0.
+# `binaries` varies ARCHITECTURE, because a binary is architecture-specific.
+# `publish` varies FEED, because an extension version is global within a distro
+# release and channel - two publish rows differing only by target send the same
+# version into the same feed and the second is refused as a duplicate. Connect
+# distributes a published extension to the per-target feeds itself.
 on:
   push:
     tags:
@@ -21,10 +17,99 @@ on:
   workflow_dispatch:
 
 jobs:
-  publish:
+  binaries:
+    name: Build ${{ matrix.rust-target }}
+    runs-on: ubuntu-latest
     strategy:
-      # Each feed reports its own outcome. Without this, one feed's failure
-      # cancels the other and a partial publish looks like a total one.
+      fail-fast: false
+      matrix:
+        include:
+          - { rust-target: x86_64-unknown-linux-musl }
+          - { rust-target: aarch64-unknown-linux-musl }
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cross
+        run: cargo install cross --locked --version 0.2.5
+
+      # musl, statically linked, so the artifact carries no libc version coupling
+      # and runs on any Avocado target of this architecture whatever the device's
+      # glibc is. A gnu build would pin the runner's glibc into the binary and
+      # fail on older devices at exec time rather than here.
+      - name: Build
+        working-directory: agent
+        run: cross build --release --target ${{ matrix.rust-target }}
+
+      - name: Verify the artifact is static and the right architecture
+        working-directory: agent
+        run: |
+          bin="target/${{ matrix.rust-target }}/release/avocado-container-agent-dev"
+          desc="$(file -b "$bin")"
+          echo "$desc"
+          case "$desc" in
+            *"statically linked"*|*"static-pie linked"*) ;;
+            *) echo "::error::artifact is not static: $desc" >&2; exit 1 ;;
+          esac
+          case "${{ matrix.rust-target }}" in
+            x86_64-*)  want="x86-64"  ;;
+            aarch64-*) want="aarch64" ;;
+          esac
+          case "$desc" in
+            *"$want"*) ;;
+            *) echo "::error::artifact is not $want: $desc" >&2; exit 1 ;;
+          esac
+
+      - name: Package
+        working-directory: agent
+        run: |
+          asset="avocado-container-agent-dev-${GITHUB_REF_NAME}-${{ matrix.rust-target }}.tar.gz"
+          tar -czf "../$asset" -C "target/${{ matrix.rust-target }}/release" \
+            avocado-container-agent-dev
+          echo "asset=$asset" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.rust-target }}
+          path: ${{ env.asset }}
+          if-no-files-found: error
+
+  release-assets:
+    name: Attach binaries to the release
+    needs: binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # cad-compile.sh refuses when SHA256SUMS does not list the asset it wants,
+      # so an architecture missing here fails the consumer's build loudly rather
+      # than leaving the agent silently absent from their image.
+      - name: Checksum
+        working-directory: dist
+        run: |
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload to the release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --notes "Agent binaries for $GITHUB_REF_NAME." \
+            || echo "release already exists, uploading into it"
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --clobber *.tar.gz SHA256SUMS
+
+  publish:
+    # Gated on the assets existing: a consumer's build fetches them, so an
+    # extension published ahead of its binaries is one nobody can build against.
+    needs: release-assets
+    strategy:
       fail-fast: false
       matrix:
         include:

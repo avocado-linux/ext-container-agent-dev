@@ -1,5 +1,5 @@
 # Cargo build output for the staged crate.
-/agent/target/
+/agent/target*/
 
 # Cross-compilation config written by cad-compile.sh at build time. It pins one
 # machine's SDK sysroot path, so a committed copy is wrong for everyone else.

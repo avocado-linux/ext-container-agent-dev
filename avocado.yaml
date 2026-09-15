@@ -1,35 +1,100 @@
-# Which targets this extension supports. '*' = any target.
-# For a BSP, replace with the single board target and set default_target.
-supported_targets: '*'
+# Targets this extension is declared to support.
+#
+# Deliberately NOT '*'. The wildcard is a claim about every target in the
+# platform, and only these two have produced an installable package. Add a
+# target here when it has actually been built and the produced binary has been
+# seen to exec on that architecture - not when it is expected to work. A
+# wildcard here with a partial sweep behind it is how `supported_targets`
+# stopped meaning anything on the in-tree version of this extension.
+supported_targets:
+  - qemux86-64
+  - imx93-frdm
 
 extensions:
-  # Rename to avocado-ext-<name> (or avocado-bsp-<board> for a BSP).
-  avocado-ext-template:
+  avocado-ext-container-agent-dev:
     version: 0.1.0
     release: r0
-    summary: One-line summary
-    description: One-line description
+    summary: Container Dev Mode device agent (development only)
+    description: |
+      Device-side agent for Container Dev Mode: holds a control WebSocket to the
+      host CLI, proxies image pulls from the host's registry over the
+      bootstrap-delivered pinned CA, and hot-reloads the target container on sync.
+      Its own extension so it is present ONLY in a dev runtime and absent from
+      prod. The per-project CA is NOT baked here; it arrives at bootstrap on the
+      writable partition when `avocado container dev up` runs. DO NOT USE IN
+      PRODUCTION.
+
+      REQUIRES the `docker` extension in the same runtime. The agent execs the
+      engine CLI as its own child on every sync, so without it there is nothing
+      it can do. Declaring that dependency here would not enforce it: the schema
+      accepts an inter-extension dependency, but avocado-cli only parses and logs
+      it - `ext/install.rs` prints "should be installed via main install command"
+      and installs nothing, deliberately, to avoid circular dependencies. A
+      declaration would read like a guarantee and deliver none. Pulling `docker`
+      in as a plain package is worse: it installs the binary without
+      `docker.service` or the bridge kernel modules, turning a loud startup
+      failure into a silent connect failure on every sync. So the pairing is
+      stated here for whoever composes the runtime, and the agent's own startup
+      preflight is what makes a missing engine fail loudly.
     license: Apache-2.0
-    url: https://github.com/avocadolinux/avocado-os
+    url: https://github.com/avocado-linux/ext-container-agent-dev
     vendor: Avocado Linux <info@avocadolinux.org>
 
-    # Runtime packages pulled from the target feed.
-    packages: {}
+    # The crate is staged and cross-compiled at package time, so its sources are
+    # part of the payload rather than a prebuilt artifact.
+    package_files:
+      - agent
+      - overlay
+      - avocado.yaml
+      - cad-*.sh
 
-    # Optional, delete what you don't use:
-    #
-    # enable_services:
-    #   - foo.service
-    #
-    # on_merge:
-    #   - systemctl start --no-block foo.service
-    #
-    # sdk:
-    #   packages:
-    #     nativesdk-foo: '*'
+    overlay: overlay
+
+    enable_services:
+      - container-agent-dev.path
+      - container-agent-dev.service
+
+    on_merge:
+      # Start the PATH unit, not the service. The service carries
+      # ConditionPathExists on the bootstrap, which does not exist at merge time,
+      # so starting it here is skipped and nothing re-triggers it: `avocado
+      # container dev up` delivers the bootstrap over SSH and issues no systemctl
+      # call. The path unit has no such condition, so it starts here and activates
+      # the service the moment the bootstrap lands.
+      - systemctl start --no-block container-agent-dev.path
+
+    on_unmerge:
+      - systemctl stop container-agent-dev.path
+      - systemctl stop container-agent-dev.service
+
+    packages:
+      avocado-container-agent-dev:
+        compile: avocado-container-agent-dev
+        install: cad-install.sh
+
+    sdk:
+      packages:
+        nativesdk-binutils: '*'
+        nativesdk-cargo: '*'
+        nativesdk-gcc: '*'
+        nativesdk-glibc-dev: '*'
+        nativesdk-libgcc-dev: '*'
+        nativesdk-rust: '*'
+        packagegroup-rust-cross-canadian-avocado-{{ avocado.target }}: '*'
 
 # Release-scoped, not channel-scoped: this resolves to avocadolinux/sdk:2026.
-# The SDK image is per-release only — appending the channel points at a tag
-# that does not exist.
+# The SDK image is per-release only - appending the channel points at a tag that
+# does not exist. AVOCADO_DISTRO_RELEASE is set by the release workflow per
+# matrix row; export it yourself for a local build.
 sdk:
   image: docker.io/avocadolinux/sdk:{{ env.AVOCADO_DISTRO_RELEASE }}
+
+  compile:
+    avocado-container-agent-dev:
+      compile: cad-compile.sh
+      clean: cad-clean.sh
+      packages:
+        libstd-rs: '*'
+        libstd-rs-dev: '*'
+  packages:
+    avocado-sdk-toolchain: '*'

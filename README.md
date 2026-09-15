@@ -1,64 +1,68 @@
-# ext-template
+# ext-container-agent-dev
 
-GitHub template repo for new Avocado extensions. **Use this template** → then work
-through the checklist below.
+`avocado-ext-container-agent-dev` - the device side of Container Dev Mode.
 
-## New-extension checklist
+The agent holds a control WebSocket open to the host CLI, proxies image pulls
+from the host's registry over a bootstrap-delivered pinned CA, and hot-reloads
+the target container when a sync lands. It is what makes `avocado container dev`
+transfer only the changed layer instead of a whole image.
 
-1. Rename the repo `ext-<name>` (or `bsp-<board>`).
-2. `avocado.yaml` — rename the extension key to `avocado-ext-<name>`, fill in
-   `summary`/`description`, set `supported_targets` (and `default_target` for a BSP),
-   list your `packages`. Leave the `sdk.image` line alone.
-3. `.github/workflows/test.yml` — set the matrix `target` to something the extension
-   actually supports (`qemux86-64` is fine for target-agnostic extensions).
-4. `.github/workflows/release.yml` — same, plus add matrix rows for every feed you
-   publish into.
-5. `CHANGELOG.md` — replace the placeholder `0.1.0` entry.
-6. Delete this section from the README and describe the extension instead (see
-   "Using this extension" below — keep that part).
-7. Repo secrets `AVOCADO_CONNECT_TOKEN` and `AVOCADO_CONNECT_ORG` must be set (org-level
-   secrets cover this if the repo is in `avocado-linux`).
+**Development only.** This extension exists so it can be composed into a dev
+runtime and left out of production. The `-dev` suffix is the gate. Do not ship it
+on a production device.
 
-Release: tag the commit with the exact `avocado.yaml` version, e.g. `git tag 0.1.0 && git push --tags`.
+## Layout
 
-## Conventions
+| Path | What it is |
+|---|---|
+| `agent/` | the Rust crate, cross-compiled at package time |
+| `cad-compile.sh` | resolves the target triple and builds the crate |
+| `cad-install.sh` | stages the built binary into the extension sysroot |
+| `cad-clean.sh` | clears the build directory |
+| `overlay/` | the `container-agent-dev` path and service units |
+| `avocado.yaml` | extension manifest |
 
-- **SDK image is release-scoped, not channel-scoped.**
-  `docker.io/avocadolinux/sdk:{{ env.AVOCADO_DISTRO_RELEASE }}` → `avocadolinux/sdk:2026`
-  on a 2026 CI leg, `avocadolinux/sdk:2024` on a 2024 one. Do not append
-  `-{{ env.AVOCADO_DISTRO_CHANNEL }}` — there is no such tag on any release. The channel
-  selects the *package feed*; the image tag is per-release only.
-- **CI comes from `avocado-linux/actions@v1`**, pinned. The matrix lives in the caller so
-  each repo owns its own target/feed combinations.
-- **Feed today is `2024`/`edge-next`.** `avocado-linux/actions@v1` *defaults* to
-  `2026`/`edge`, but the 2026 feed currently publishes only `jetson-agx-thor`, so the
-  workflows here pass 2024 explicitly. Move a target to 2026 as it lands there.
+## Requires a container engine
 
-## Using this extension
+The agent execs the engine CLI as its own child on every sync, so a runtime
+without the `docker` extension gives it nothing to do. That dependency is stated
+rather than declared: avocado-cli parses an inter-extension dependency and logs
+it without installing anything, so declaring it would read as a guarantee and
+deliver none. Compose both into the runtime yourself. The agent's startup
+preflight is what makes a missing engine fail loudly rather than silently.
 
-`ext-template` is an [Avocado](https://avocadolinux.org) extension — a reusable fragment of
-build- and runtime-configuration that you compose into your own Avocado project. To use it,
-declare it as a package-sourced extension in your `avocado.yaml` and add it to a runtime:
+## Building locally
 
-```yaml
-extensions:
-  avocado-ext-template:
-    source:
-      type: package
-      version: "*"        # or pin an exact version
+The SDK image tag is release-scoped and comes from the environment, so export it
+before building:
 
-runtimes:
-  my-runtime:
-    extensions:
-      - avocado-ext-template
+```
+AVOCADO_DISTRO_RELEASE=2024 avocado ext install -t qemux86-64 avocado-ext-container-agent-dev
+AVOCADO_DISTRO_RELEASE=2024 avocado ext build   -t qemux86-64 avocado-ext-container-agent-dev
 ```
 
-Then install and build:
+Two things that will otherwise cost you time:
 
-```sh
-avocado install   # fetches + installs the SDK, extensions and runtime deps from your config
-avocado build     # builds the SDK compile steps, extensions and runtime images
-```
+- `avocado` runs its SDK container with a TTY, so a build launched without one
+  fails with `cannot attach stdin to a TTY-enabled container`. Wrap it in
+  `script -qefc '<cmd>' /dev/null` when running from CI or a background shell.
+- dnf prompts for confirmation and blocks; `--no-tui` does not suppress it. Pass
+  `--dnf-arg -y`.
 
-`avocado install` pulls the extension from your target's package feed and merges its
-config into your project; `avocado build` then produces the runtime.
+## Supported targets
+
+`avocado.yaml` lists them explicitly rather than using `'*'`. A target belongs
+there once it has produced an installable package and the produced binary has
+been seen to exec on that architecture. The release matrix in
+`.github/workflows/release.yml` should carry one row per declared target.
+
+## Releasing
+
+Tag the version in `avocado.yaml`. The release workflow guards that the tag and
+the manifest version match, packages one leg per matrix row, and publishes each
+to the feed derived from that row's distro release and channel.
+
+Bump `release:` whenever the packaged payload changes without a version change.
+An unchanged version-release identity means the package manager never delivers
+the new payload to a device that already has the extension installed, and both
+the build and the install report success anyway.

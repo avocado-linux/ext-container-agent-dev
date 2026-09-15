@@ -1,0 +1,11 @@
+# Cargo build output for the staged crate.
+/agent/target/
+
+# Cross-compilation config written by cad-compile.sh at build time. It pins one
+# machine's SDK sysroot path, so a committed copy is wrong for everyone else.
+/agent/.cargo/
+
+# avocado-cli build state. .avocado-state is a JSON file, not a directory, so it
+# needs a slash-free pattern - a trailing slash silently fails to match it.
+/.avocado-state
+/avocado.lock

@@ -36,7 +36,8 @@ The guard also backstops by asserting `ring` IS present: a guard that cannot see
   `TARGET="$RUST_TARGET" scripts/check-provider.sh` immediately before
   `cargo build`, resolving the same SDK triple, manifest, and `CARGO_HOME` the
   build uses. Under `set -e`, a non-zero exit fails the compile. This is the
-  real enforcement point - avocado-os has no CI or pre-commit hook.
+  real enforcement point - this repository has no pre-commit hook,
+  and CI reaches the guard only through this compile.
 - **Advisory run (standalone, no `TARGET`):** running
   `scripts/check-provider.sh` directly (e.g. from the repo root) checks the
   **host** triple, not the shipped cross target. Treat it as an advisory

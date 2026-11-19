@@ -1,6 +1,6 @@
 [Unit]
 Description=Watch for the Container Dev Mode bootstrap and start the agent
-Documentation=https://github.com/avocadolinux/avocado-os
+Documentation=https://github.com/avocado-linux/ext-container-agent-dev
 # This unit exists because the service cannot start itself at merge time.
 #
 # The service carries ConditionPathExists=<bootstrap.json>, and the extension's

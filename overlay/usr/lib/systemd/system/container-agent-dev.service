@@ -1,6 +1,6 @@
 [Unit]
 Description=Avocado Container Dev Mode device agent (development only)
-Documentation=https://github.com/avocadolinux/avocado-os
+Documentation=https://github.com/avocado-linux/ext-container-agent-dev
 After=network.target
 Wants=network.target
 # The agent execs the docker CLI as its own child on every sync, so a daemon

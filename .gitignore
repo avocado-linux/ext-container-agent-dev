@@ -5,6 +5,10 @@
 # machine's SDK sysroot path, so a committed copy is wrong for everyone else.
 /agent/.cargo/
 
+# Prebuilt tarball and SHA256SUMS staged for cad-compile.sh to use instead of
+# the release. Binaries, not source.
+/dist/
+
 # avocado-cli build state. .avocado-state is a JSON file, not a directory, so it
 # needs a slash-free pattern - a trailing slash silently fails to match it.
 /.avocado-state

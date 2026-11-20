@@ -1,13 +1,15 @@
 #!/bin/bash
 # Stage the prebuilt agent binary for this target so cad-install.sh can place it.
 #
-# This fetches a release artifact rather than compiling from source, which is the
-# same shape ext-microclaw uses. The reason is not laziness about cross-compiling:
-# `avocado ext package` runs no build step, so the published RPM can only carry
-# what is in the repo. Shipping the crate source instead pushed the compile onto
-# the consumer, and a consumer has no reason to have a Rust cross toolchain in
-# their SDK. Measured 2026-09-15: a clean project following the documented setup
-# failed inside ring's build script with
+# This fetches a release artifact rather than compiling from source, as
+# ext-microclaw does, with one difference: mc-compile.sh pins a sha256 per
+# architecture in the script, and this script reads its digests from the same
+# release as the artifact. The reason for fetching is not laziness about
+# cross-compiling: `avocado ext package` runs no build step, so the published RPM
+# can only carry what is in the repo. Shipping the crate source instead pushed the
+# compile onto the consumer, and a consumer has no reason to have a Rust cross
+# toolchain in their SDK. Measured 2026-09-15: a clean project following the
+# documented setup failed inside ring's build script with
 # `ToolNotFound: failed to find tool "x86_64-avocado-linux-gcc"`, after both
 # `avocado install` and the extension's own sysroot creation had reported success.
 #
@@ -52,38 +54,91 @@ esac
 ASSET="avocado-container-agent-dev-${VERSION}-${ASSET_ARCH}.tar.gz"
 BASE="https://github.com/avocado-linux/ext-container-agent-dev/releases/download/${VERSION}"
 
+# A tarball and SHA256SUMS placed in dist/ next to this script are used instead
+# of the release, with the same file names the release workflow produces. This
+# lets a build run against binaries that are not released yet, and without
+# network access.
+PREBUILT_DIR="$(cd "$(dirname "$0")" && pwd)/dist"
+
 STAGE_DIR="${AVOCADO_BUILD_DIR}/agent"
 mkdir -p "$STAGE_DIR"
 cd "$STAGE_DIR"
 
+CLEAN_HINT="Run 'avocado ext clean' (or 'avocado sdk clean') to discard the cached download in ${STAGE_DIR}, then build again."
+
+# Print the digest SUMS_FILE records for ASSET, or nothing when it is not listed.
+listed_digest() {
+    awk -v a="$ASSET" '$2 == a { print $1; exit }' "$1"
+}
+
+# True when FILE hashes to the digest SUMS_FILE records for ASSET.
+matches_sums() {
+    local want got
+    want="$(listed_digest "$2")"
+    got="$(sha256sum "$1" | cut -d' ' -f1)"
+    [ -n "$want" ] && [ "$want" = "$got" ]
+}
+
+# Download through a .part file and rename only on success, so an interrupted
+# fetch never leaves a partial file behind under the final name.
+fetch() {
+    echo "Fetching $1"
+    curl -fsSL --retry 3 --retry-delay 2 -o "$2.part" "$1"
+    mv "$2.part" "$2"
+}
+
 echo "resolved-artifact: ${ASSET}"
 
-if [ ! -f "$ASSET" ]; then
-    # Download beside the final name and rename only on success, so an
-    # interrupted fetch never leaves a partial tarball that the skip above would
-    # reuse on every later build.
-    echo "Fetching ${BASE}/${ASSET}"
-    curl -fsSL -o "${ASSET}.part" "${BASE}/${ASSET}"
-    mv "${ASSET}.part" "$ASSET"
-fi
-
 # SHA256SUMS comes from the same release as the artifact, so this verifies the
-# transfer rather than the provenance - the release itself is the trust anchor.
-# That is proportionate for a first-party artifact and avoids pinning a digest
-# in this file, which would force every release through a build-commit-tag dance
-# just to record the hash of something the tag itself produces.
-echo "Fetching ${BASE}/SHA256SUMS"
-curl -fsSL -o SHA256SUMS "${BASE}/SHA256SUMS"
+# transfer, not the provenance. Anyone who can replace the release assets can
+# replace both files together and this check still passes. The digests are not
+# pinned anywhere outside the release; dist/ is where a pinned copy would go.
+if [ -f "${PREBUILT_DIR}/${ASSET}" ] && [ -f "${PREBUILT_DIR}/SHA256SUMS" ]; then
+    echo "Using ${PREBUILT_DIR}/${ASSET} instead of the ${VERSION} release"
+    SUMS="${PREBUILT_DIR}/SHA256SUMS"
+    if [ -z "$(listed_digest "$SUMS")" ]; then
+        echo "Error: ${SUMS} does not list ${ASSET}" >&2
+        exit 1
+    fi
+    if ! matches_sums "${PREBUILT_DIR}/${ASSET}" "$SUMS"; then
+        echo "Error: ${PREBUILT_DIR}/${ASSET} does not match ${SUMS}" >&2
+        exit 1
+    fi
+    TARBALL="${PREBUILT_DIR}/${ASSET}"
+else
+    # Cached per version, so a rebuild needs no network once both files are
+    # here, and a version bump never reads the previous version's sums.
+    SUMS="SHA256SUMS-${VERSION}"
+    if [ ! -f "$SUMS" ]; then
+        fetch "${BASE}/SHA256SUMS" "$SUMS"
+    fi
+    if [ -z "$(listed_digest "$SUMS")" ]; then
+        echo "Error: SHA256SUMS from the ${VERSION} release does not list ${ASSET}" >&2
+        echo "The release is incomplete for this architecture; do not install it." >&2
+        exit 1
+    fi
 
-if ! grep -q " ${ASSET}\$" SHA256SUMS; then
-    echo "Error: SHA256SUMS from the ${VERSION} release does not list ${ASSET}" >&2
-    echo "The release is incomplete for this architecture; do not install it." >&2
-    exit 1
+    if [ -f "$ASSET" ] && ! matches_sums "$ASSET" "$SUMS"; then
+        echo "Cached ${ASSET} does not match ${SUMS}; downloading it again"
+        rm -f "$ASSET"
+    fi
+    if [ ! -f "$ASSET" ]; then
+        echo "Fetching ${BASE}/${ASSET}"
+        curl -fsSL --retry 3 --retry-delay 2 -o "${ASSET}.part" "${BASE}/${ASSET}"
+        # Verify before the rename, so a file under the final name has always
+        # matched the sums at least once.
+        if ! matches_sums "${ASSET}.part" "$SUMS"; then
+            rm -f "${ASSET}.part"
+            echo "Error: the downloaded ${ASSET} does not match ${SUMS}" >&2
+            echo "$CLEAN_HINT" >&2
+            exit 1
+        fi
+        mv "${ASSET}.part" "$ASSET"
+    fi
+    TARBALL="$ASSET"
 fi
 
-grep " ${ASSET}\$" SHA256SUMS | sha256sum -c -
-
-tar -xzf "$ASSET"
+tar -xzf "$TARBALL"
 
 if [ ! -f avocado-container-agent-dev ]; then
     echo "Error: ${ASSET} did not contain avocado-container-agent-dev" >&2

@@ -32,12 +32,14 @@ The guard also backstops by asserting `ring` IS present: a guard that cannot see
 
 ### Enforced gate vs advisory run
 
-- **Enforced gate (in-hook, with `TARGET`):** `cad-compile.sh` runs the guard as
-  `TARGET="$RUST_TARGET" scripts/check-provider.sh` immediately before
-  `cargo build`, resolving the same SDK triple, manifest, and `CARGO_HOME` the
-  build uses. Under `set -e`, a non-zero exit fails the compile. This is the
-  real enforcement point - this repository has no pre-commit hook,
-  and CI reaches the guard only through this compile.
+- **Enforced gate (in CI, with `TARGET`):** the `binaries` job in
+  `.github/workflows/release.yml` runs the guard as
+  `TARGET=<rust-target> scripts/check-provider.sh` immediately before
+  `cross build`, resolving the same musl triple the shipped binary is built
+  for. A non-zero exit fails the job before anything is built or released. The
+  `agent` job in `.github/workflows/test.yml` runs the same step on every pull
+  request. This repository has no pre-commit hook, and `cad-compile.sh` no
+  longer builds the crate, so these two jobs are the only enforcement points.
 - **Advisory run (standalone, no `TARGET`):** running
   `scripts/check-provider.sh` directly (e.g. from the repo root) checks the
   **host** triple, not the shipped cross target. Treat it as an advisory

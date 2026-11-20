@@ -76,10 +76,7 @@ extensions:
 
     # No SDK toolchain. Nothing is compiled at build time any more, so a consumer
     # needs no Rust cross toolchain in their SDK - which is the point of the
-    # switch. These declarations did not reach a consumer anyway: a package-sourced
-    # extension does not carry its sdk.packages across, so the build failed inside
-    # ring's build script on a machine that had never been told it needed a
-    # compiler.
+    # switch.
 
 # Release-scoped, not channel-scoped: this resolves to avocadolinux/sdk:2026.
 # The SDK image is per-release only - appending the channel points at a tag that

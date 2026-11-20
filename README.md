@@ -15,10 +15,10 @@ on a production device.
 
 | Path | What it is |
 |---|---|
-| `agent/` | the Rust crate, cross-compiled at package time |
-| `cad-compile.sh` | resolves the target triple and builds the crate |
-| `cad-install.sh` | stages the built binary into the extension sysroot |
-| `cad-clean.sh` | clears the build directory |
+| `agent/` | the Rust crate; the release workflow builds it into static musl binaries |
+| `cad-compile.sh` | downloads the prebuilt binary for the target's architecture from the matching release and verifies it against `SHA256SUMS` |
+| `cad-install.sh` | stages the binary into the extension sysroot |
+| `cad-clean.sh` | removes the staged download and binary |
 | `overlay/` | the `container-agent-dev` path and service units |
 | `avocado.yaml` | extension manifest |
 
@@ -33,8 +33,10 @@ preflight is what makes a missing engine fail loudly rather than silently.
 
 ## Building locally
 
-The SDK image tag is release-scoped and comes from the environment, so export it
-before building:
+The build downloads the agent binary from the GitHub release named after the
+`avocado.yaml` version, so it only works for a version that has been released.
+An unreleased version fails the fetch with a 404. The SDK image tag is
+release-scoped and comes from the environment, so export it before building:
 
 ```
 AVOCADO_DISTRO_RELEASE=2024 avocado ext install -t qemux86-64 avocado-ext-container-agent-dev
@@ -53,14 +55,17 @@ Two things that will otherwise cost you time:
 
 `avocado.yaml` lists them explicitly rather than using `'*'`. A target belongs
 there once it has produced an installable package and the produced binary has
-been seen to exec on that architecture. The release matrix in
-`.github/workflows/release.yml` should carry one row per declared target.
+been seen to exec on that architecture. The release workflow does not need a
+row per target: `binaries` builds one artifact per architecture, and `publish`
+has one row per feed, as the header of `.github/workflows/release.yml` explains.
 
 ## Releasing
 
-Tag the version in `avocado.yaml`. The release workflow guards that the tag and
-the manifest version match, packages one leg per matrix row, and publishes each
-to the feed derived from that row's distro release and channel.
+Tag the version in `avocado.yaml`. The release workflow first checks that the
+tag and the manifest version match, then builds the agent binaries, attaches
+them and `SHA256SUMS` to the GitHub release of that tag, and publishes the
+extension to the feed derived from each `publish` row's distro release and
+channel.
 
 Bump `release:` whenever the packaged payload changes without a version change.
 An unchanged version-release identity means the package manager never delivers

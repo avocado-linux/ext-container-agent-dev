@@ -18,8 +18,13 @@ set -euo pipefail
 
 VERSION="${AVOCADO_EXT_VERSION:-}"
 if [ -z "$VERSION" ]; then
-    VERSION=$(grep -oE '^[[:space:]]+version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' \
-        "$(dirname "$0")/avocado.yaml" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+    # The first indented `version:` is the extension's own. Accept it bare or
+    # quoted: `avocado ext package` rewrites it to `version: '0.2.0'` in the
+    # avocado.yaml a consumer receives, so the unquoted form only ever appears in
+    # this repo. Keep a prerelease suffix, since the release workflow tags
+    # `X.Y.Z-*` and those assets are named after the full tag.
+    VERSION=$(sed -nE "/^[[:space:]]+version:/{s/^[[:space:]]+version:[[:space:]]*['\"]?([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)['\"]?[[:space:]]*(#.*)?\$/\1/p;q;}" \
+        "$(dirname "$0")/avocado.yaml")
 fi
 if [ -z "$VERSION" ]; then
     echo "Error: could not determine the extension version" >&2
@@ -54,8 +59,12 @@ cd "$STAGE_DIR"
 echo "resolved-artifact: ${ASSET}"
 
 if [ ! -f "$ASSET" ]; then
+    # Download beside the final name and rename only on success, so an
+    # interrupted fetch never leaves a partial tarball that the skip above would
+    # reuse on every later build.
     echo "Fetching ${BASE}/${ASSET}"
-    curl -fsSL -o "$ASSET" "${BASE}/${ASSET}"
+    curl -fsSL -o "${ASSET}.part" "${BASE}/${ASSET}"
+    mv "${ASSET}.part" "$ASSET"
 fi
 
 # SHA256SUMS comes from the same release as the artifact, so this verifies the

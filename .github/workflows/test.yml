@@ -69,8 +69,11 @@ jobs:
             echo "::error::could not read the extension version from avocado.yaml" >&2
             exit 1
           fi
-          # Only "not found" means unreleased. Any other failure (network, auth)
-          # fails here, so a broken lookup never turns into a silent skip.
+          # Only a "not found" answer means unreleased. A network or auth failure
+          # fails the job instead of skipping. gh prints "not found" for a
+          # missing tag and for a repository it cannot see alike; the repository
+          # here is $GITHUB_REPOSITORY, the one this job runs in, so the second
+          # case cannot arise.
           if err="$(gh release view "$version" --repo "$GITHUB_REPOSITORY" 2>&1 >/dev/null)"; then
             echo "released=true" >> "$GITHUB_OUTPUT"
             echo "Release $version exists; the extension build runs against it."

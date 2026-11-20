@@ -25,8 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agent/rust-toolchain.toml`.
 - `cad-compile.sh` caches `SHA256SUMS` per version, retries downloads, verifies
   a download before keeping it, downloads a cached tarball that fails the
-  checksum again once, and uses a tarball and `SHA256SUMS` staged in `dist/`
-  instead of the release when both are present.
+  checksum again once, fetches a cached `SHA256SUMS` that does not list the
+  asset again once, and uses a tarball and `SHA256SUMS` staged in `dist/`
+  instead of the release when both are present. A `dist/` with only one of the
+  two files is ignored with a warning.
 - The PR `build` check is skipped, with the reason logged, when no release
   exists yet for the `avocado.yaml` version.
 - `cad-install.sh` checks the staged binary's architecture against the target

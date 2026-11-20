@@ -106,15 +106,25 @@ if [ -f "${PREBUILT_DIR}/${ASSET}" ] && [ -f "${PREBUILT_DIR}/SHA256SUMS" ]; the
     fi
     TARBALL="${PREBUILT_DIR}/${ASSET}"
 else
+    if [ -f "${PREBUILT_DIR}/${ASSET}" ] || [ -f "${PREBUILT_DIR}/SHA256SUMS" ]; then
+        echo "Warning: ${PREBUILT_DIR} holds only one of ${ASSET} and SHA256SUMS, so it is ignored and the ${VERSION} release is used" >&2
+    fi
     # Cached per version, so a rebuild needs no network once both files are
     # here, and a version bump never reads the previous version's sums.
     SUMS="SHA256SUMS-${VERSION}"
     if [ ! -f "$SUMS" ]; then
         fetch "${BASE}/SHA256SUMS" "$SUMS"
+    elif [ -z "$(listed_digest "$SUMS")" ]; then
+        # A cached file that does not list this asset may be a page a proxy
+        # served with a 200, or a copy fetched before the release was complete.
+        # Fetch it once more rather than failing on it for every later build.
+        echo "Cached ${SUMS} does not list ${ASSET}; fetching it again"
+        fetch "${BASE}/SHA256SUMS" "$SUMS"
     fi
     if [ -z "$(listed_digest "$SUMS")" ]; then
         echo "Error: SHA256SUMS from the ${VERSION} release does not list ${ASSET}" >&2
         echo "The release is incomplete for this architecture; do not install it." >&2
+        echo "${CLEAN_HINT}" >&2
         exit 1
     fi
 
@@ -125,8 +135,8 @@ else
     if [ ! -f "$ASSET" ]; then
         echo "Fetching ${BASE}/${ASSET}"
         curl -fsSL --retry 3 --retry-delay 2 -o "${ASSET}.part" "${BASE}/${ASSET}"
-        # Verify before the rename, so a file under the final name has always
-        # matched the sums at least once.
+        # Verify before the rename, so a file this script writes under the final
+        # name has matched the sums.
         if ! matches_sums "${ASSET}.part" "$SUMS"; then
             rm -f "${ASSET}.part"
             echo "Error: the downloaded ${ASSET} does not match ${SUMS}" >&2

@@ -1,18 +1,15 @@
 name: Release
 
-# Package + publish on a version tag. The matrix lives here (the caller owns it);
-# each leg calls the single-combo reusable helper. The publish feed is derived from
-# distro-release/distro-channel. The tag must equal the avocado.yaml version.
+# Build the agent binaries, attach them to the release, build the extension
+# against that release, then package + publish the extension. The tag must equal
+# the avocado.yaml version.
 #
-# The matrix dimension is the FEED, not the target. An extension version is
-# global within a (distro-release, distro-channel), so two rows differing only by
-# target publish the same version twice into the same feed and the second fails
-# with "that extension version is already taken". Connect fans a published
-# extension out to the per-target feeds itself - avocado-ext-cli and
-# avocado-ext-microclaw are arch-specific and reach both qemux86-64-ext and
-# imx93-frdm-ext while publishing only a qemux86-64 row - so `target` here just
-# names the target used to package, and adding rows for other targets buys
-# nothing while breaking the release.
+# Two matrices here answer different questions, and conflating them broke 0.1.0.
+# `binaries` varies ARCHITECTURE, because a binary is architecture-specific.
+# `publish` varies FEED, because an extension version is global within a distro
+# release and channel - two publish rows differing only by target send the same
+# version into the same feed and the second is refused as a duplicate. Connect
+# distributes a published extension to the per-target feeds itself.
 on:
   push:
     tags:
@@ -21,10 +18,189 @@ on:
   workflow_dispatch:
 
 jobs:
-  publish:
+  # Runs before anything is built or released. GITHUB_REF_NAME names the assets
+  # and the release, so a dispatch from a branch would create a public release
+  # and tag named after the branch, and a tag that differs from avocado.yaml
+  # would publish assets under a version no consumer resolves. The
+  # tag-equals-version guard inside extension-release.yml runs too late to stop
+  # either, and skips non-tag refs entirely.
+  guard:
+    name: Tag matches avocado.yaml
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compare the tag with the manifest version
+        run: |
+          manifest="$(sed -nE "/^[[:space:]]+version:/{s/^[[:space:]]+version:[[:space:]]*['\"]?([^'\"[:space:]#]+)['\"]?.*/\1/p;q;}" avocado.yaml)"
+          if [ "$GITHUB_REF_NAME" != "$manifest" ]; then
+            echo "::error::tag '$GITHUB_REF_NAME' does not match avocado.yaml version '$manifest'" >&2
+            exit 1
+          fi
+          echo "tag and avocado.yaml agree on $manifest"
+
+  binaries:
+    name: Build ${{ matrix.rust-target }}
+    needs: guard
+    runs-on: ubuntu-latest
     strategy:
-      # Each feed reports its own outcome. Without this, one feed's failure
-      # cancels the other and a partial publish looks like a total one.
+      fail-fast: false
+      matrix:
+        include:
+          - { rust-target: x86_64-unknown-linux-musl }
+          - { rust-target: aarch64-unknown-linux-musl }
+    steps:
+      - uses: actions/checkout@v5
+
+      # The ring-only provider rule, checked against the triple that ships. This
+      # job is the only place the published binaries are built, so it is the
+      # enforcement point.
+      - name: Check the rustls crypto provider
+        working-directory: agent
+        run: TARGET=${{ matrix.rust-target }} scripts/check-provider.sh
+
+      - name: Install cross
+        run: cargo install cross --locked --version 0.2.5
+
+      # musl, statically linked, so the artifact carries no libc version coupling
+      # and runs on any Avocado target of this architecture whatever the device's
+      # glibc is. A gnu build would pin the runner's glibc into the binary and
+      # fail on older devices at exec time rather than here. --locked fails the
+      # build when Cargo.lock does not match Cargo.toml, so the binary is built
+      # from the committed lockfile; agent/rust-toolchain.toml pins the compiler.
+      - name: Build
+        working-directory: agent
+        run: cross build --release --locked --target ${{ matrix.rust-target }}
+
+      - name: Verify the artifact is static and the right architecture
+        working-directory: agent
+        run: |
+          bin="target/${{ matrix.rust-target }}/release/avocado-container-agent-dev"
+          desc="$(file -b "$bin")"
+          echo "$desc"
+          case "$desc" in
+            *"statically linked"*|*"static-pie linked"*) ;;
+            *) echo "::error::artifact is not static: $desc" >&2; exit 1 ;;
+          esac
+          case "${{ matrix.rust-target }}" in
+            x86_64-*)  want="x86-64"  ;;
+            aarch64-*) want="aarch64" ;;
+          esac
+          case "$desc" in
+            *"$want"*) ;;
+            *) echo "::error::artifact is not $want: $desc" >&2; exit 1 ;;
+          esac
+
+      - name: Package
+        working-directory: agent
+        run: |
+          asset="avocado-container-agent-dev-${GITHUB_REF_NAME}-${{ matrix.rust-target }}.tar.gz"
+          tar -czf "../$asset" -C "target/${{ matrix.rust-target }}/release" \
+            avocado-container-agent-dev
+          echo "asset=$asset" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.rust-target }}
+          path: ${{ env.asset }}
+          if-no-files-found: error
+
+  release-assets:
+    name: Attach binaries to the release
+    needs: binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # cad-compile.sh refuses when SHA256SUMS does not list the asset it wants,
+      # so an architecture missing here fails the consumer's build loudly rather
+      # than leaving the agent silently absent from their image.
+      - name: Checksum
+        working-directory: dist
+        run: |
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      # A release is created once per tag. A consumer that already fetched an
+      # asset holds its checksum, so a rebuilt binary under the same tag must
+      # fail here rather than replace the files it verified. A draft left by a
+      # failed run also counts as existing and has to be deleted by hand.
+      - name: Refuse an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::a release for tag '$GITHUB_REF_NAME' already exists; refusing to replace its assets" >&2
+            exit 1
+          fi
+
+      # Draft first so the release never shows without its assets.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --title "$GITHUB_REF_NAME" --notes "Agent binaries for $GITHUB_REF_NAME."
+
+      - name: Upload the assets
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            *.tar.gz SHA256SUMS
+
+      # Last step on purpose. `verify` and every consumer build fetch these
+      # assets anonymously through cad-compile.sh, and a draft release's assets
+      # are not downloadable that way, so the release has to be public before
+      # this job ends.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+
+  # Builds the extension the way a consumer does, against the release that
+  # `release-assets` just made public, before anything reaches a feed.
+  # `publish` cannot catch a broken fetch: extension-release.yml runs only
+  # `avocado ext package` and the upload, never `avocado ext install` or
+  # `avocado ext build`, so cad-compile.sh does not run there. Without this
+  # job the first run of the fetch against a real release is a consumer's
+  # build, after the extension is already in both feeds.
+  #
+  # The rows are the publish feeds times one target per architecture the
+  # release ships. ext-version is the tag, which `guard` has already checked
+  # against avocado.yaml.
+  verify:
+    name: Verify ${{ matrix.target }} @ ${{ matrix.distro-release }}/${{ matrix.distro-channel }}
+    needs: release-assets
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: qemux86-64, distro-release: "2026", distro-channel: next }
+          - { target: qemux86-64, distro-release: "2024", distro-channel: next }
+          - { target: imx93-frdm, distro-release: "2026", distro-channel: next }
+          - { target: imx93-frdm, distro-release: "2024", distro-channel: next }
+    uses: avocado-linux/actions/.github/workflows/extension-test.yml@v1
+    with:
+      target:         ${{ matrix.target }}
+      distro-release: ${{ matrix.distro-release }}
+      distro-channel: ${{ matrix.distro-channel }}
+      ext-version:    ${{ github.ref_name }}
+
+  publish:
+    # Gated on `verify`, which builds against the published release. Packaging
+    # here runs no build step, so this job alone cannot tell whether a consumer
+    # can build what it publishes.
+    needs: verify
+    strategy:
       fail-fast: false
       matrix:
         include:

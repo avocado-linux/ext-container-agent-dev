@@ -12,7 +12,82 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The extension build below fetches the released binary for the avocado.yaml
+  # version, so it never compiles agent/. This job does, the same way the
+  # release `binaries` job does, so a Rust compile error or a provider-rule
+  # violation fails the PR instead of the next release.
+  agent:
+    name: Agent ${{ matrix.rust-target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rust-target: x86_64-unknown-linux-musl }
+          - { rust-target: aarch64-unknown-linux-musl }
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the rustls crypto provider
+        working-directory: agent
+        run: TARGET=${{ matrix.rust-target }} scripts/check-provider.sh
+
+      - name: Install cross
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Build
+        working-directory: agent
+        run: cross build --release --locked --target ${{ matrix.rust-target }}
+
+  # `build` runs cad-compile.sh, which downloads the agent binary from the GitHub
+  # release named after the avocado.yaml version. On a version-bump PR that
+  # release does not exist until the tag is pushed, so `build` would fail on a
+  # 404 that says nothing about the PR. This job checks first, and `build` is
+  # skipped with the reason in this job's log instead of going red.
+  #
+  # A draft release counts as absent. The API hides drafts from a token without
+  # write access, which this one is, and cad-compile.sh cannot download a
+  # draft's assets anonymously either.
+  release-exists:
+    name: Release exists for the avocado.yaml version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      released: ${{ steps.check.outputs.released }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Look up the release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Same parse as the `guard` job in release.yml, so a quoted version works.
+          version="$(sed -nE "/^[[:space:]]+version:/{s/^[[:space:]]+version:[[:space:]]*['\"]?([^'\"[:space:]#]+)['\"]?.*/\1/p;q;}" avocado.yaml)"
+          if [ -z "$version" ]; then
+            echo "::error::could not read the extension version from avocado.yaml" >&2
+            exit 1
+          fi
+          # Only a "not found" answer means unreleased. A network or auth failure
+          # fails the job instead of skipping. gh prints "not found" for a
+          # missing tag and for a repository it cannot see alike; the repository
+          # here is $GITHUB_REPOSITORY, the one this job runs in, so the second
+          # case cannot arise.
+          if err="$(gh release view "$version" --repo "$GITHUB_REPOSITORY" 2>&1 >/dev/null)"; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "Release $version exists; the extension build runs against it."
+          elif printf '%s' "$err" | grep -qi 'not found'; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::build skipped: no published release named $version yet. cad-compile.sh downloads the agent binary from that release, and the release workflow creates it when the $version tag is pushed. The agent job still compiles agent/."
+          else
+            echo "::error::could not look up release $version: $err" >&2
+            exit 1
+          fi
+
   build:
+    needs: release-exists
+    if: needs.release-exists.outputs.released == 'true'
     strategy:
       fail-fast: false
       matrix:

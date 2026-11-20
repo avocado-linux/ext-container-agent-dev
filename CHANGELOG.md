@@ -4,6 +4,43 @@ All notable changes to avocado-ext-container-agent-dev are documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0]
+
+### Changed
+- The extension ships a prebuilt agent binary instead of its source. `avocado
+  ext package` runs no build step, so the published RPM could only carry what
+  was in the repo; shipping the crate pushed the compile onto consumers, who
+  have no Rust cross toolchain in their SDK and no reason to. A clean project
+  following the documented setup failed inside `ring`'s build script with
+  `ToolNotFound: failed to find tool "x86_64-avocado-linux-gcc"`, after both
+  `avocado install` and the extension's own sysroot creation reported success.
+- Binaries are statically linked against musl, so they carry no libc version
+  coupling and run on any Avocado target of the right architecture.
+- `release.yml` builds x86_64 and aarch64 binaries, verifies each is static and
+  the right architecture, and attaches them with a `SHA256SUMS` to the release
+  before the extension publishes. A `verify` job then builds the extension
+  against that release for qemux86-64 and imx93-frdm on each publish feed, and
+  `publish` waits for it.
+- The agent is built with `--locked` on a toolchain pinned in
+  `agent/rust-toolchain.toml`.
+- `cad-compile.sh` caches `SHA256SUMS` per version, retries downloads, verifies
+  a download before keeping it, downloads a cached tarball that fails the
+  checksum again once, fetches a cached `SHA256SUMS` that does not list the
+  asset again once, and uses a tarball and `SHA256SUMS` staged in `dist/`
+  instead of the release when both are present. A `dist/` with only one of the
+  two files is ignored with a warning.
+- The PR `build` check is skipped, with the reason logged, when no release
+  exists yet for the `avocado.yaml` version.
+- `cad-install.sh` checks the staged binary's architecture against the target
+  before installing. The packaged extension is noarch and nothing downstream
+  re-checks, so a mismatch would otherwise install cleanly and fail at exec time
+  on the device.
+
+### Removed
+- The Rust cross toolchain from the extension's SDK requirements, and `libstd-rs`
+  from the compile section. Nothing compiles at build time any more.
+- The crate source from `package_files`. The RPM is no longer a source package.
+
 ## [0.1.1]
 
 ### Fixed

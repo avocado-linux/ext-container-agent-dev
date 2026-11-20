@@ -10,9 +10,11 @@
 # already turned out to be wrong, so this comment states only what was measured.
 #
 #   - "the agent cross-compiles against the musl SDK, which clears only ring."
-#     No build has targeted musl. Every triple built so far is a glibc one
-#     (x86_64-avocado-linux-gnu), and no published feed carries a 32-bit ARM or
-#     musl target to build against.
+#     Not the reason. The shipped binaries are now built for musl
+#     (x86_64-unknown-linux-musl and aarch64-unknown-linux-musl, by `cross` in
+#     the release workflow), but the rule predates that: every earlier build
+#     was a glibc one (x86_64-avocado-linux-gnu), and nobody has built the
+#     crate with aws-lc-rs for musl to see whether it fails.
 #   - "ring is pure Rust, so unlike aws-lc-rs it needs no C toolchain."
 #     False. Measured 2026-09-15: building this crate for
 #     x86_64-avocado-linux-gnu without the cross toolchain on PATH fails inside
@@ -42,9 +44,10 @@
 # entirely", and the rcgen dev-dependency is pinned to ring for exactly that.
 #
 # TARGET: when set (env var or first positional arg) the guard resolves against
-# that target triple, matching the build's cross target. In the build hook this
-# is mandatory (TARGET="$RUST_TARGET"). Run standalone with no TARGET, the guard
-# checks the host triple as an ADVISORY check.
+# that target triple, matching the build's cross target. In CI this is
+# mandatory (TARGET=<rust-target> in the release `binaries` job and the test
+# `agent` job). Run standalone with no TARGET, the guard checks the host triple
+# as an ADVISORY check.
 
 set -euo pipefail
 

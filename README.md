@@ -15,10 +15,10 @@ on a production device.
 
 | Path | What it is |
 |---|---|
-| `agent/` | the Rust crate, cross-compiled at package time |
-| `cad-compile.sh` | resolves the target triple and builds the crate |
-| `cad-install.sh` | stages the built binary into the extension sysroot |
-| `cad-clean.sh` | clears the build directory |
+| `agent/` | the Rust crate; the release workflow builds it into static musl binaries |
+| `cad-compile.sh` | downloads the prebuilt binary for the target's architecture from the matching release and verifies it against `SHA256SUMS` |
+| `cad-install.sh` | stages the binary into the extension sysroot |
+| `cad-clean.sh` | removes the staged download and binary |
 | `overlay/` | the `container-agent-dev` path and service units |
 | `avocado.yaml` | extension manifest |
 
@@ -33,8 +33,13 @@ preflight is what makes a missing engine fail loudly rather than silently.
 
 ## Building locally
 
-The SDK image tag is release-scoped and comes from the environment, so export it
-before building:
+The build downloads the agent binary from the GitHub release named after the
+`avocado.yaml` version, so it only works for a version that has been released.
+An unreleased version fails the fetch with a 404. To build against binaries that
+are not released, put the tarball and its `SHA256SUMS`, named as the release
+workflow names them, in `dist/` next to `avocado.yaml`; `cad-compile.sh` verifies
+and uses them instead of downloading. The SDK image tag is
+release-scoped and comes from the environment, so export it before building:
 
 ```
 AVOCADO_DISTRO_RELEASE=2024 avocado ext install -t qemux86-64 avocado-ext-container-agent-dev
@@ -53,14 +58,40 @@ Two things that will otherwise cost you time:
 
 `avocado.yaml` lists them explicitly rather than using `'*'`. A target belongs
 there once it has produced an installable package and the produced binary has
-been seen to exec on that architecture. The release matrix in
-`.github/workflows/release.yml` should carry one row per declared target.
+been seen to exec on that architecture. The release workflow does not need a
+row per target: `binaries` builds one artifact per architecture, and `publish`
+has one row per feed, as the header of `.github/workflows/release.yml` explains.
 
 ## Releasing
 
-Tag the version in `avocado.yaml`. The release workflow guards that the tag and
-the manifest version match, packages one leg per matrix row, and publishes each
-to the feed derived from that row's distro release and channel.
+Tag the version in `avocado.yaml`. The release workflow first checks that the
+tag and the manifest version match, then builds the agent binaries, attaches
+them and `SHA256SUMS` to the GitHub release of that tag, and publishes the
+extension to the feed derived from each `publish` row's distro release and
+channel.
+
+The `build` check in `test.yml` builds the extension against the release named
+after the `avocado.yaml` version, because `cad-compile.sh` downloads the agent
+binary from it. On a version-bump PR that release does not exist yet, so the
+`release-exists` job finds that out and `build` is skipped, with the reason in
+that job's log, instead of failing on a 404. On a PR that does not bump the
+version, `build` exercises the last released binary, not the agent code in the
+PR; the `agent` job compiles that code but does not package or install it.
+
+The order is:
+
+1. Merge the version-bump PR.
+2. Push the version tag.
+3. The release workflow builds both architectures, creates the release as a
+   draft, uploads the assets and publishes the release.
+4. `verify` builds the extension against that release for qemux86-64 and
+   imx93-frdm on each publish feed.
+5. The extension publish job runs.
+
+A release is created once per tag. Re-running the workflow for a tag that
+already has a release refuses instead of replacing its files, so a rebuilt
+binary needs a new version. The feed index is rebuilt separately, so the new
+package can appear after the release workflow finishes.
 
 Bump `release:` whenever the packaged payload changes without a version change.
 An unchanged version-release identity means the package manager never delivers

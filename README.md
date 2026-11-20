@@ -35,7 +35,10 @@ preflight is what makes a missing engine fail loudly rather than silently.
 
 The build downloads the agent binary from the GitHub release named after the
 `avocado.yaml` version, so it only works for a version that has been released.
-An unreleased version fails the fetch with a 404. The SDK image tag is
+An unreleased version fails the fetch with a 404. To build against binaries that
+are not released, put the tarball and its `SHA256SUMS`, named as the release
+workflow names them, in `dist/` next to `avocado.yaml`; `cad-compile.sh` verifies
+and uses them instead of downloading. The SDK image tag is
 release-scoped and comes from the environment, so export it before building:
 
 ```
@@ -67,16 +70,23 @@ them and `SHA256SUMS` to the GitHub release of that tag, and publishes the
 extension to the feed derived from each `publish` row's distro release and
 channel.
 
-A version-bump PR shows a red `build (..., 2024, next)` check. That check
-downloads the new version's release assets, and they exist only after the
-release workflow has run on that tag. `main` has no required checks, so the
-order is:
+The `build` check in `test.yml` builds the extension against the release named
+after the `avocado.yaml` version, because `cad-compile.sh` downloads the agent
+binary from it. On a version-bump PR that release does not exist yet, so the
+`release-exists` job finds that out and `build` is skipped, with the reason in
+that job's log, instead of failing on a 404. On a PR that does not bump the
+version, `build` exercises the last released binary, not the agent code in the
+PR; the `agent` job compiles that code but does not package or install it.
+
+The order is:
 
 1. Merge the version-bump PR.
 2. Push the version tag.
-3. The release workflow builds both targets, creates the release as a draft,
-   uploads the assets and publishes the release.
-4. The extension publish job runs.
+3. The release workflow builds both architectures, creates the release as a
+   draft, uploads the assets and publishes the release.
+4. `verify` builds the extension against that release for qemux86-64 and
+   imx93-frdm on each publish feed.
+5. The extension publish job runs.
 
 A release is created once per tag. Re-running the workflow for a tag that
 already has a release refuses instead of replacing its files, so a rebuilt

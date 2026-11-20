@@ -1,7 +1,8 @@
 name: Release
 
-# Build the agent binaries, attach them to the release, then package + publish the
-# extension. The tag must equal the avocado.yaml version.
+# Build the agent binaries, attach them to the release, build the extension
+# against that release, then package + publish the extension. The tag must equal
+# the avocado.yaml version.
 #
 # Two matrices here answer different questions, and conflating them broke 0.1.0.
 # `binaries` varies ARCHITECTURE, because a binary is architecture-specific.
@@ -65,10 +66,12 @@ jobs:
       # musl, statically linked, so the artifact carries no libc version coupling
       # and runs on any Avocado target of this architecture whatever the device's
       # glibc is. A gnu build would pin the runner's glibc into the binary and
-      # fail on older devices at exec time rather than here.
+      # fail on older devices at exec time rather than here. --locked fails the
+      # build when Cargo.lock does not match Cargo.toml, so the binary is built
+      # from the committed lockfile; agent/rust-toolchain.toml pins the compiler.
       - name: Build
         working-directory: agent
-        run: cross build --release --target ${{ matrix.rust-target }}
+        run: cross build --release --locked --target ${{ matrix.rust-target }}
 
       - name: Verify the artifact is static and the right architecture
         working-directory: agent
@@ -154,18 +157,49 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             *.tar.gz SHA256SUMS
 
-      # Last step on purpose. `publish` fetches these assets anonymously through
-      # cad-compile.sh, and a draft release's assets are not downloadable that
-      # way, so the release has to be public before this job ends.
+      # Last step on purpose. `verify` and every consumer build fetch these
+      # assets anonymously through cad-compile.sh, and a draft release's assets
+      # are not downloadable that way, so the release has to be public before
+      # this job ends.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
 
-  publish:
-    # Gated on the assets existing: a consumer's build fetches them, so an
-    # extension published ahead of its binaries is one nobody can build against.
+  # Builds the extension the way a consumer does, against the release that
+  # `release-assets` just made public, before anything reaches a feed.
+  # `publish` cannot catch a broken fetch: extension-release.yml runs only
+  # `avocado ext package` and the upload, never `avocado ext install` or
+  # `avocado ext build`, so cad-compile.sh does not run there. Without this
+  # job the first run of the fetch against a real release is a consumer's
+  # build, after the extension is already in both feeds.
+  #
+  # The rows are the publish feeds times one target per architecture the
+  # release ships. ext-version is the tag, which `guard` has already checked
+  # against avocado.yaml.
+  verify:
+    name: Verify ${{ matrix.target }} @ ${{ matrix.distro-release }}/${{ matrix.distro-channel }}
     needs: release-assets
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: qemux86-64, distro-release: "2026", distro-channel: next }
+          - { target: qemux86-64, distro-release: "2024", distro-channel: next }
+          - { target: imx93-frdm, distro-release: "2026", distro-channel: next }
+          - { target: imx93-frdm, distro-release: "2024", distro-channel: next }
+    uses: avocado-linux/actions/.github/workflows/extension-test.yml@v1
+    with:
+      target:         ${{ matrix.target }}
+      distro-release: ${{ matrix.distro-release }}
+      distro-channel: ${{ matrix.distro-channel }}
+      ext-version:    ${{ github.ref_name }}
+
+  publish:
+    # Gated on `verify`, which builds against the published release. Packaging
+    # here runs no build step, so this job alone cannot tell whether a consumer
+    # can build what it publishes.
+    needs: verify
     strategy:
       fail-fast: false
       matrix:

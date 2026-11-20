@@ -18,7 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coupling and run on any Avocado target of the right architecture.
 - `release.yml` builds x86_64 and aarch64 binaries, verifies each is static and
   the right architecture, and attaches them with a `SHA256SUMS` to the release
-  before the extension publishes.
+  before the extension publishes. A `verify` job then builds the extension
+  against that release for qemux86-64 and imx93-frdm on each publish feed, and
+  `publish` waits for it.
+- The agent is built with `--locked` on a toolchain pinned in
+  `agent/rust-toolchain.toml`.
+- `cad-compile.sh` caches `SHA256SUMS` per version, retries downloads, verifies
+  a download before keeping it, downloads a cached tarball that fails the
+  checksum again once, and uses a tarball and `SHA256SUMS` staged in `dist/`
+  instead of the release when both are present.
+- The PR `build` check is skipped, with the reason logged, when no release
+  exists yet for the `avocado.yaml` version.
 - `cad-install.sh` checks the staged binary's architecture against the target
   before installing. The packaged extension is noarch and nothing downstream
   re-checks, so a mismatch would otherwise install cleanly and fail at exec time

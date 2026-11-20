@@ -1,0 +1,7 @@
+# Pinned so a release built from a tag uses the same compiler whenever it runs,
+# instead of whatever stable the runner has that day. cross reads this file from
+# the crate directory. Bump it deliberately, in its own change.
+[toolchain]
+channel = "1.100.0"
+profile = "minimal"
+targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]

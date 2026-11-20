@@ -12,6 +12,33 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The extension build below fetches the released binary for the avocado.yaml
+  # version, so it never compiles agent/. This job does, the same way the
+  # release `binaries` job does, so a Rust compile error or a provider-rule
+  # violation fails the PR instead of the next release.
+  agent:
+    name: Agent ${{ matrix.rust-target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rust-target: x86_64-unknown-linux-musl }
+          - { rust-target: aarch64-unknown-linux-musl }
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the rustls crypto provider
+        working-directory: agent
+        run: TARGET=${{ matrix.rust-target }} scripts/check-provider.sh
+
+      - name: Install cross
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Build
+        working-directory: agent
+        run: cross build --release --target ${{ matrix.rust-target }}
+
   build:
     strategy:
       fail-fast: false

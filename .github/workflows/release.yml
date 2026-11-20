@@ -17,8 +17,31 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Runs before anything is built or released. GITHUB_REF_NAME names the assets
+  # and the release, so a dispatch from a branch would create a public release
+  # and tag named after the branch, and a tag that differs from avocado.yaml
+  # would publish assets under a version no consumer resolves. The
+  # tag-equals-version guard inside extension-release.yml runs too late to stop
+  # either, and skips non-tag refs entirely.
+  guard:
+    name: Tag matches avocado.yaml
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compare the tag with the manifest version
+        run: |
+          manifest="$(sed -nE "/^[[:space:]]+version:/{s/^[[:space:]]+version:[[:space:]]*['\"]?([^'\"[:space:]#]+)['\"]?.*/\1/p;q;}" avocado.yaml)"
+          if [ "$GITHUB_REF_NAME" != "$manifest" ]; then
+            echo "::error::tag '$GITHUB_REF_NAME' does not match avocado.yaml version '$manifest'" >&2
+            exit 1
+          fi
+          echo "tag and avocado.yaml agree on $manifest"
+
   binaries:
     name: Build ${{ matrix.rust-target }}
+    needs: guard
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -28,6 +51,13 @@ jobs:
           - { rust-target: aarch64-unknown-linux-musl }
     steps:
       - uses: actions/checkout@v5
+
+      # The ring-only provider rule, checked against the triple that ships. This
+      # job is the only place the published binaries are built, so it is the
+      # enforcement point.
+      - name: Check the rustls crypto provider
+        working-directory: agent
+        run: TARGET=${{ matrix.rust-target }} scripts/check-provider.sh
 
       - name: Install cross
         run: cargo install cross --locked --version 0.2.5

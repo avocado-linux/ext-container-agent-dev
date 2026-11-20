@@ -67,6 +67,22 @@ them and `SHA256SUMS` to the GitHub release of that tag, and publishes the
 extension to the feed derived from each `publish` row's distro release and
 channel.
 
+A version-bump PR shows a red `build (..., 2024, next)` check. That check
+downloads the new version's release assets, and they exist only after the
+release workflow has run on that tag. `main` has no required checks, so the
+order is:
+
+1. Merge the version-bump PR.
+2. Push the version tag.
+3. The release workflow builds both targets, creates the release as a draft,
+   uploads the assets and publishes the release.
+4. The extension publish job runs.
+
+A release is created once per tag. Re-running the workflow for a tag that
+already has a release refuses instead of replacing its files, so a rebuilt
+binary needs a new version. The feed index is rebuilt separately, so the new
+package can appear after the release workflow finishes.
+
 Bump `release:` whenever the packaged payload changes without a version change.
 An unchanged version-release identity means the package manager never delivers
 the new payload to a device that already has the extension installed, and both

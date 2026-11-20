@@ -124,16 +124,43 @@ jobs:
           sha256sum *.tar.gz > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Upload to the release
-        working-directory: dist
+      # A release is created once per tag. A consumer that already fetched an
+      # asset holds its checksum, so a rebuilt binary under the same tag must
+      # fail here rather than replace the files it verified. A draft left by a
+      # failed run also counts as existing and has to be deleted by hand.
+      - name: Refuse an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::a release for tag '$GITHUB_REF_NAME' already exists; refusing to replace its assets" >&2
+            exit 1
+          fi
+
+      # Draft first so the release never shows without its assets.
+      - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" --notes "Agent binaries for $GITHUB_REF_NAME." \
-            || echo "release already exists, uploading into it"
+            --draft \
+            --title "$GITHUB_REF_NAME" --notes "Agent binaries for $GITHUB_REF_NAME."
+
+      - name: Upload the assets
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --clobber *.tar.gz SHA256SUMS
+            *.tar.gz SHA256SUMS
+
+      # Last step on purpose. `publish` fetches these assets anonymously through
+      # cad-compile.sh, and a draft release's assets are not downloadable that
+      # way, so the release has to be public before this job ends.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
 
   publish:
     # Gated on the assets existing: a consumer's build fetches them, so an
